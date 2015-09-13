@@ -14,7 +14,7 @@
     },
     {
         "provider_name": "YouTube",
-        "provider_url": "http:\/\/www.youtube.com\/",
+        "provider_url": "https:\/\/www.youtube.com\/",
         "endpoints": [
             {
                 "url": "http:\/\/www.youtube.com\/oembed",
