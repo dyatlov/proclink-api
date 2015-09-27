@@ -121,8 +121,10 @@ func main() {
 	maxHTMLBytesToRead := flag.Int64("html_bytes_to_read", 50000, "How much data to read from URL if it's an html page")
 	maxBinaryBytesToRead := flag.Int64("binary_bytes_to_read", 4096, "How much data to read from URL if it's NOT an html page")
 	waitTimeout := flag.Int("wait_timeout", 7, "How much time to wait for/fetch response from remote server")
-	whiteListRanges := flag.String("whiteList_ranges", "", "What IP ranges to allow. Example: 178.25.32/8")
-	blackListRanges := flag.String("blackList_ranges", "", "What IP ranges to disallow. Example: 178.25.32/8")
+	whiteListRanges := flag.String("whitelist_ranges", "", "What IP ranges to allow. Example: 178.25.32.1/8")
+	blackListRanges := flag.String("blacklist_ranges", "", "What IP ranges to disallow. Example: 178.25.32.1/8")
+
+	flag.Parse()
 
 	buf, err := ioutil.ReadFile(*providersFile)
 
@@ -131,13 +133,17 @@ func main() {
 	}
 
 	var whiteListNetworks []*net.IPNet
-	if whiteListRanges != nil {
-		whiteListNetworks, err = stringsToNetworks(strings.Split(*whiteListRanges, " "))
+	if len(*whiteListRanges) > 0 {
+		if whiteListNetworks, err = stringsToNetworks(strings.Split(*whiteListRanges, " ")); err != nil {
+			panic(err)
+		}
 	}
 
 	var blackListNetworks []*net.IPNet
-	if blackListRanges != nil {
-		blackListNetworks, err = stringsToNetworks(strings.Split(*blackListRanges, " "))
+	if len(*blackListRanges) > 0 {
+		if blackListNetworks, err = stringsToNetworks(strings.Split(*blackListRanges, " ")); err != nil {
+			panic(err)
+		}
 	}
 
 	oe := oembed.NewOembed()
