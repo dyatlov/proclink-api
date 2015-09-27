@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -80,7 +81,7 @@ func (worker *apiWorker) TunnyJob(data interface{}) interface{} {
 		if info == nil {
 			log.Printf("No info for url: %s", u)
 
-			return &workerData{Status: 404, Data: "{\"status\": \"error\", \"message\":\"Unable to retrieve information form provided url\"}"}
+			return &workerData{Status: 404, Data: "{\"status\": \"error\", \"message\":\"Unable to retrieve information from provided url\"}"}
 		}
 		if info.Status < 300 {
 			log.Printf("Url parsed: %s", u)
@@ -98,6 +99,20 @@ func (worker *apiWorker) TunnyJob(data interface{}) interface{} {
 
 var workerPool *tunny.WorkPool
 
+// stringsToNetworks converts arrays of string representation of IP ranges into []*net.IPnet slice
+func stringsToNetworks(ss []string) ([]*net.IPNet, error) {
+	var result []*net.IPNet
+	for _, s := range ss {
+		_, network, err := net.ParseCIDR(s)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, network)
+	}
+
+	return result, nil
+}
+
 func main() {
 	providersFile := flag.String("providers_file", "providers.json", "Path to oembed providers json file")
 	workerCount := flag.Int64("worker_count", 1000, "Amount of workers to start")
@@ -105,12 +120,24 @@ func main() {
 	port := flag.Int("port", 8000, "Port to listen on")
 	maxHTMLBytesToRead := flag.Int64("html_bytes_to_read", 50000, "How much data to read from URL if it's an html page")
 	maxBinaryBytesToRead := flag.Int64("binary_bytes_to_read", 4096, "How much data to read from URL if it's NOT an html page")
-	waitTimeout := flag.Int("wait_timeout", 3, "How much time to wait for/fetch response from remote server")
+	waitTimeout := flag.Int("wait_timeout", 7, "How much time to wait for/fetch response from remote server")
+	whiteListRanges := flag.String("whiteList_ranges", "", "What IP ranges to allow. Example: 178.25.32/8")
+	blackListRanges := flag.String("blackList_ranges", "", "What IP ranges to disallow. Example: 178.25.32/8")
 
 	buf, err := ioutil.ReadFile(*providersFile)
 
 	if err != nil {
 		panic(err)
+	}
+
+	var whiteListNetworks []*net.IPNet
+	if whiteListRanges != nil {
+		whiteListNetworks, err = stringsToNetworks(strings.Split(*whiteListRanges, " "))
+	}
+
+	var blackListNetworks []*net.IPNet
+	if blackListRanges != nil {
+		blackListNetworks, err = stringsToNetworks(strings.Split(*blackListRanges, " "))
 	}
 
 	oe := oembed.NewOembed()
@@ -122,6 +149,8 @@ func main() {
 		p.MaxHTMLBodySize = *maxHTMLBytesToRead
 		p.MaxBinaryBodySize = *maxBinaryBytesToRead
 		p.WaitTimeout = time.Duration(*waitTimeout) * time.Second
+		p.BlacklistedIPNetworks = blackListNetworks
+		p.WhitelistedIPNetworks = whiteListNetworks
 		workers[i] = &(apiWorker{Parser: p})
 	}
 
