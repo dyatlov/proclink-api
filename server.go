@@ -170,15 +170,15 @@ func main() {
 
 	workerPool = pool
 
-	startServer(*host, *port)
+	startServer(*host, *port, *waitTimeout)
 }
 
-func startServer(host string, port int) {
+func startServer(host string, port int, waitTimeout int) {
 	s := &http.Server{
 		Addr:           fmt.Sprintf("%s:%d", host, port),
 		Handler:        &apiHandler{},
-		ReadTimeout:    3 * time.Second,
-		WriteTimeout:   3 * time.Second,
+		ReadTimeout:    time.Duration(waitTimeout) * time.Second,
+		WriteTimeout:   time.Duration(waitTimeout) * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 
