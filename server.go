@@ -36,6 +36,10 @@ func (h *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", "ProcLink")
 	w.Header().Set("Content-Type", "application/json")
 
+	// to be able to retrieve data from javascript directly
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET")
+
 	_, err := url.Parse(u)
 
 	if err != nil {
