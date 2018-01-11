@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jeffail/tunny"
 	"github.com/dyatlov/go-oembed/oembed"
 	"github.com/dyatlov/go-url2oembed/url2oembed"
-	"github.com/jeffail/tunny"
 )
 
 type workerData struct {
@@ -48,14 +48,7 @@ func (h *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := workerPool.SendWork(u)
-
-	if err != nil {
-		log.Printf("An unknown error occured: %s", err.Error())
-
-		http.Error(w, "{\"status\": \"error\", \"message\":\"Internal error\"}", 500)
-		return
-	}
+	result := workerPool.Process(u)
 
 	if data, ok := result.(*workerData); ok {
 		w.WriteHeader(data.Status)
@@ -69,12 +62,14 @@ func (h *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Use this call to block further jobs if necessary
-func (worker *apiWorker) TunnyReady() bool {
-	return true
-}
+func (worker *apiWorker) BlockUntilReady() {}
+
+func (worker *apiWorker) Interrupt() {}
+
+func (worker *apiWorker) Terminate() {}
 
 // This is where the work actually happens
-func (worker *apiWorker) TunnyJob(data interface{}) interface{} {
+func (worker *apiWorker) Process(data interface{}) interface{} {
 	if u, ok := data.(string); ok {
 		u = strings.Trim(u, "\r\n")
 
@@ -101,7 +96,7 @@ func (worker *apiWorker) TunnyJob(data interface{}) interface{} {
 	return &workerData{Status: 500, Data: "{\"status\": \"error\", \"message\":\"Something weird happened\"}"}
 }
 
-var workerPool *tunny.WorkPool
+var workerPool *tunny.Pool
 
 // stringsToNetworks converts arrays of string representation of IP ranges into []*net.IPnet slice
 func stringsToNetworks(ss []string) ([]*net.IPNet, error) {
@@ -119,7 +114,7 @@ func stringsToNetworks(ss []string) ([]*net.IPNet, error) {
 
 func main() {
 	providersFile := flag.String("providers_file", "providers.json", "Path to oembed providers json file")
-	workerCount := flag.Int64("worker_count", 1000, "Amount of workers to start")
+	workerCount := flag.Int("worker_count", 1000, "Amount of workers to start")
 	host := flag.String("host", "localhost", "Host to listen on")
 	port := flag.Int("port", 8000, "Port to listen on")
 	maxHTMLBytesToRead := flag.Int64("html_bytes_to_read", 50000, "How much data to read from URL if it's an html page")
@@ -153,22 +148,17 @@ func main() {
 	oe := oembed.NewOembed()
 	oe.ParseProviders(bytes.NewReader(buf))
 
-	workers := make([]tunny.TunnyWorker, *workerCount)
-	for i := range workers {
+	workerFactory := func() tunny.Worker {
 		p := url2oembed.NewParser(oe)
 		p.MaxHTMLBodySize = *maxHTMLBytesToRead
 		p.MaxBinaryBodySize = *maxBinaryBytesToRead
 		p.WaitTimeout = time.Duration(*waitTimeout) * time.Second
 		p.BlacklistedIPNetworks = blackListNetworks
 		p.WhitelistedIPNetworks = whiteListNetworks
-		workers[i] = &(apiWorker{Parser: p})
+		return &(apiWorker{Parser: p})
 	}
 
-	pool, err := tunny.CreateCustomPool(workers).Open()
-
-	if err != nil {
-		log.Fatal(err)
-	}
+	pool := tunny.New(*workerCount, workerFactory)
 
 	defer pool.Close()
 
