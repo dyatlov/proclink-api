@@ -14,7 +14,6 @@ import (
 
 	"github.com/dyatlov/go-oembed/oembed"
 	"github.com/dyatlov/go-url2oembed/url2oembed"
-	"github.com/jeffail/tunny"
 )
 
 type workerData struct {
@@ -22,8 +21,9 @@ type workerData struct {
 	Data   string
 }
 
-type apiWorker struct {
-	Parser *url2oembed.Parser
+type job struct {
+	Url    string
+	Result chan workerData
 }
 
 type apiHandler struct {
@@ -48,60 +48,40 @@ func (h *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := workerPool.SendWork(u)
+	log.Printf("Sending job: %s", u)
 
-	if err != nil {
-		log.Printf("An unknown error occured: %s", err.Error())
+	c := make(chan workerData)
+	jobPool <- job{Url: u, Result: c}
+	data := <-c
 
-		http.Error(w, "{\"status\": \"error\", \"message\":\"Internal error\"}", 500)
-		return
-	}
-
-	if data, ok := result.(*workerData); ok {
-		w.WriteHeader(data.Status)
-		fmt.Fprintln(w, data.Data)
-		return
-	}
-
-	log.Print("Unable to decode worker result")
-
-	http.Error(w, "{\"status\": \"error\", \"message\":\"Unable to decode worker result\"}", 500)
-}
-
-// Use this call to block further jobs if necessary
-func (worker *apiWorker) TunnyReady() bool {
-	return true
+	w.WriteHeader(data.Status)
+	fmt.Fprintln(w, data.Data)
 }
 
 // This is where the work actually happens
-func (worker *apiWorker) TunnyJob(data interface{}) interface{} {
-	if u, ok := data.(string); ok {
-		u = strings.Trim(u, "\r\n")
+func worker(parser *url2oembed.Parser, jobs <-chan job) {
+	for {
+		params := <-jobs
+		u := strings.Trim(params.Url, "\r\n")
 
 		log.Printf("Got url: %s", u)
 
-		info := worker.Parser.Parse(u)
+		info := parser.Parse(u)
 
 		if info == nil {
 			log.Printf("No info for url: %s", u)
-
-			return &workerData{Status: 404, Data: "{\"status\": \"error\", \"message\":\"Unable to retrieve information from provided url\"}"}
-		}
-		if info.Status < 300 {
+			params.Result <- workerData{Status: 404, Data: "{\"status\": \"error\", \"message\":\"Unable to retrieve information from provided url\"}"}
+		} else if info.Status < 300 {
 			log.Printf("Url parsed: %s", u)
-
-			return &workerData{Status: 200, Data: info.String()}
+			params.Result <- workerData{Status: 200, Data: info.String()}
+		} else {
+			log.Printf("Something weird: %s", u)
+			params.Result <- workerData{Status: 411, Data: fmt.Sprintf("{\"status\": \"error\", \"message\":\"Unable to obtain data. Status code: %d\"}", info.Status)}
 		}
-
-		log.Printf("Something weird: %s", u)
-
-		return &workerData{Status: 411, Data: fmt.Sprintf("{\"status\": \"error\", \"message\":\"Unable to obtain data. Status code: %d\"}", info.Status)}
 	}
-
-	return &workerData{Status: 500, Data: "{\"status\": \"error\", \"message\":\"Something weird happened\"}"}
 }
 
-var workerPool *tunny.WorkPool
+var jobPool chan job
 
 // stringsToNetworks converts arrays of string representation of IP ranges into []*net.IPnet slice
 func stringsToNetworks(ss []string) ([]*net.IPNet, error) {
@@ -119,7 +99,7 @@ func stringsToNetworks(ss []string) ([]*net.IPNet, error) {
 
 func main() {
 	providersFile := flag.String("providers_file", "providers.json", "Path to oembed providers json file")
-	workerCount := flag.Int64("worker_count", 1000, "Amount of workers to start")
+	workerCount := flag.Int("worker_count", 1000, "Amount of workers to start")
 	host := flag.String("host", "localhost", "Host to listen on")
 	port := flag.Int("port", 8000, "Port to listen on")
 	maxHTMLBytesToRead := flag.Int64("html_bytes_to_read", 50000, "How much data to read from URL if it's an html page")
@@ -153,26 +133,20 @@ func main() {
 	oe := oembed.NewOembed()
 	oe.ParseProviders(bytes.NewReader(buf))
 
-	workers := make([]tunny.TunnyWorker, *workerCount)
-	for i := range workers {
+	log.Println("Starting workers:", *workerCount)
+
+	jobPool = make(chan job)
+	for i := 0; i < *workerCount; i++ {
 		p := url2oembed.NewParser(oe)
 		p.MaxHTMLBodySize = *maxHTMLBytesToRead
 		p.MaxBinaryBodySize = *maxBinaryBytesToRead
 		p.WaitTimeout = time.Duration(*waitTimeout) * time.Second
 		p.BlacklistedIPNetworks = blackListNetworks
 		p.WhitelistedIPNetworks = whiteListNetworks
-		workers[i] = &(apiWorker{Parser: p})
+		go worker(p, jobPool)
 	}
 
-	pool, err := tunny.CreateCustomPool(workers).Open()
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer pool.Close()
-
-	workerPool = pool
+	log.Println("All workers started. Starting server on port", *port)
 
 	startServer(*host, *port, *waitTimeout)
 }
